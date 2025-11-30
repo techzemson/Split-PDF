@@ -1,7 +1,11 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { SplitPdfTool } from './components/SplitPdfTool';
+import { Documentation } from './components/Documentation';
+import { BookIcon } from './components/Icons';
 
 function App() {
+  const [showDocs, setShowDocs] = useState(false);
+
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
       {/* Header */}
@@ -13,7 +17,14 @@ function App() {
             </div>
             <span className="font-bold text-slate-800 text-xl tracking-tight">SplitMaster <span className="text-blue-600">AI</span></span>
           </div>
-          {/* Links removed as requested */}
+          
+          <button 
+            onClick={() => setShowDocs(true)}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-slate-600 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all"
+          >
+            <BookIcon className="w-4 h-4" />
+            Documentation
+          </button>
         </div>
       </header>
 
@@ -22,10 +33,13 @@ function App() {
         <SplitPdfTool />
       </main>
 
+      {/* Documentation Modal */}
+      {showDocs && <Documentation onClose={() => setShowDocs(false)} />}
+
       {/* Footer */}
       <footer className="bg-white border-t border-slate-200 py-6 mt-auto">
         <div className="max-w-7xl mx-auto px-4 text-center text-slate-400 text-xs">
-          {/* Footer content removed as requested */}
+          {/* Footer content removed as requested previously */}
         </div>
       </footer>
     </div>
