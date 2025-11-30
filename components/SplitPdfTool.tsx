@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import JSZip from 'jszip';
+import { PDFDocument, degrees } from 'pdf-lib';
 import { 
   UploadCloudIcon, FileIcon, ScissorsIcon, SparklesIcon, 
   DownloadIcon, TrashIcon, CheckCircleIcon, RefreshCwIcon, ZapIcon,
   UndoIcon, RedoIcon, PaletteIcon, PlusIcon, XIcon
 } from './Icons';
 import { PdfPage, SplitRange, SplitMode, SplitResult, ProcessStep } from '../types';
-import { RANGE_COLORS, MOCK_TOTAL_PAGES, MINIMAL_PDF_DATA } from '../constants';
+import { RANGE_COLORS } from '../constants';
 import { AnalysisCharts } from './AnalysisCharts';
 import { getSmartSplitSuggestions } from '../services/geminiService';
 
@@ -27,7 +28,7 @@ export const SplitPdfTool: React.FC = () => {
   const [selectionStart, setSelectionStart] = useState<number | null>(null);
 
   // View Options
-  const [zoomLevel, setZoomLevel] = useState<number>(5); // Grid columns
+  const [zoomLevel, setZoomLevel] = useState<number>(5); // Used for Grid column calculation
 
   // Form Inputs
   const [fixedNumber, setFixedNumber] = useState<number>(1);
@@ -79,28 +80,43 @@ export const SplitPdfTool: React.FC = () => {
 
   // -- Handlers --
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const uploadedFile = e.target.files[0];
-      setFile(uploadedFile);
       
-      // Simulate loading pages
-      const newPages: PdfPage[] = Array.from({ length: MOCK_TOTAL_PAGES }, (_, i) => ({
-        id: i,
-        pageNumber: i + 1,
-        selected: false,
-        rotation: 0
-      }));
-      setPages(newPages);
-      
-      // Default: No ranges active initially for better UX ("Custom" feeling)
-      setRanges([]);
-      setHistory([[]]);
-      setHistoryIndex(0);
+      try {
+        const arrayBuffer = await uploadedFile.arrayBuffer();
+        // Load the PDF to get the real page count
+        const pdfDoc = await PDFDocument.load(arrayBuffer);
+        const pageCount = pdfDoc.getPageCount();
+
+        setFile(uploadedFile);
+        
+        // Generate pages based on actual PDF count
+        const newPages: PdfPage[] = Array.from({ length: pageCount }, (_, i) => ({
+          id: i,
+          pageNumber: i + 1,
+          selected: false,
+          rotation: 0
+        }));
+        setPages(newPages);
+        
+        // Default: No ranges active initially
+        setRanges([]);
+        setHistory([[]]);
+        setHistoryIndex(0);
+      } catch (error) {
+        console.error("Error loading PDF:", error);
+        alert("Failed to load PDF file. Please ensure it is a valid PDF.");
+      }
     }
   };
 
   const handleReset = () => {
+    // Revoke any existing object URLs to free memory
+    if (results) {
+        results.forEach(r => URL.revokeObjectURL(r.downloadUrl));
+    }
     setFile(null);
     setPages([]);
     setRanges([]);
@@ -192,28 +208,27 @@ export const SplitPdfTool: React.FC = () => {
     }
   };
 
-  // -- Splitting Logic (Simulation) --
+  // -- Splitting Logic (Real) --
   const startSplitting = () => {
     setIsProcessing(true);
     setResults(null);
     setActiveStepIndex(0);
 
     const steps: ProcessStep[] = [
-      { label: 'Analyzing PDF Structure...', progress: 0, status: 'pending' },
-      { label: 'Applying Page Rotations...', progress: 0, status: 'pending' },
-      { label: 'Splitting Document...', progress: 0, status: 'pending' },
-      { label: 'Compressing Output...', progress: 0, status: 'pending' },
-      { label: 'Finalizing Files...', progress: 0, status: 'pending' },
+      { label: 'Reading Document...', progress: 0, status: 'pending' },
+      { label: 'Processing Rotations...', progress: 0, status: 'pending' },
+      { label: 'Splitting Pages...', progress: 0, status: 'pending' },
+      { label: 'Generating Files...', progress: 0, status: 'pending' },
+      { label: 'Finalizing...', progress: 0, status: 'pending' },
     ];
     setProcessSteps(steps);
   };
 
-  // Effect to drive the simulated progress
+  // Effect to drive the simulated progress visualization while actually working
   useEffect(() => {
     if (!isProcessing || activeStepIndex >= processSteps.length) {
       if (isProcessing && activeStepIndex >= processSteps.length) {
-        // Done
-        finishProcessing();
+        performRealSplitting();
       }
       return;
     }
@@ -221,93 +236,140 @@ export const SplitPdfTool: React.FC = () => {
     const timer = setTimeout(() => {
       setProcessSteps(prev => {
         const newSteps = [...prev];
-        // Mark current as active or completed
         if (newSteps[activeStepIndex].status === 'pending') {
           newSteps[activeStepIndex].status = 'active';
           newSteps[activeStepIndex].progress = 10;
         } else if (newSteps[activeStepIndex].progress < 100) {
-          newSteps[activeStepIndex].progress += 30; // Increment
+          newSteps[activeStepIndex].progress += 30;
         } else {
           newSteps[activeStepIndex].status = 'completed';
           setActiveStepIndex(idx => idx + 1);
         }
         return newSteps;
       });
-    }, 400); // Speed of simulation
+    }, 200); // Fast visual updates
 
     return () => clearTimeout(timer);
   }, [isProcessing, activeStepIndex, processSteps]);
 
-  const finishProcessing = () => {
-    // Generate mock results based on current mode
-    let generatedResults: SplitResult[] = [];
-    const baseName = file?.name.replace('.pdf', '') || 'document';
+  const performRealSplitting = async () => {
+    if (!file) return;
 
-    if (splitMode === SplitMode.RANGES || splitMode === SplitMode.AI_SMART) {
-      generatedResults = ranges.map((r, i) => ({
-        fileName: `${baseName}_part_${i + 1}_${r.label.replace(/\s+/g, '_')}.pdf`,
-        pageCount: r.end - r.start + 1,
-        fileSize: ((r.end - r.start + 1) * 0.15).toFixed(2), // Mock size logic
-        originalName: baseName
-      }));
-    } else if (splitMode === SplitMode.FIXED) {
-      const numFiles = Math.ceil(pages.length / fixedNumber);
-      for (let i = 0; i < numFiles; i++) {
-        const count = Math.min(fixedNumber, pages.length - (i * fixedNumber));
-        generatedResults.push({
-          fileName: `${baseName}_part_${i + 1}.pdf`,
-          pageCount: count,
-          fileSize: (count * 0.15).toFixed(2),
-          originalName: baseName
-        });
-      }
-    } else if (splitMode === SplitMode.EXTRACT) {
-        // Mock extraction result
-        const count = extractInput.split(',').length || 1;
-        generatedResults.push({
-            fileName: `${baseName}_extracted.pdf`,
-            pageCount: count,
-            fileSize: (count * 0.15).toFixed(2),
-            originalName: baseName
-        })
+    try {
+        const arrayBuffer = await file.arrayBuffer();
+        const pdfDoc = await PDFDocument.load(arrayBuffer);
+        const generatedResults: SplitResult[] = [];
+        const baseName = file.name.replace('.pdf', '');
+
+        // Helper to extract pages and save as a new PDF
+        const createPdfFromPages = async (pageIndices: number[], fileName: string) => {
+            const subDoc = await PDFDocument.create();
+            // Copy pages from original
+            const copiedPages = await subDoc.copyPages(pdfDoc, pageIndices);
+            
+            copiedPages.forEach((page, idx) => {
+                // Apply rotation if needed
+                const originalPageId = pageIndices[idx];
+                const pageState = pages.find(p => p.id === originalPageId);
+                if (pageState && pageState.rotation !== 0) {
+                    const existingRotation = page.getRotation().angle;
+                    page.setRotation(degrees(existingRotation + pageState.rotation));
+                }
+                subDoc.addPage(page);
+            });
+
+            const pdfBytes = await subDoc.save();
+            const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+            const url = URL.createObjectURL(blob);
+            
+            return {
+                fileName: fileName,
+                pageCount: pageIndices.length,
+                fileSize: (pdfBytes.byteLength / 1024 / 1024).toFixed(2), // MB
+                originalName: file.name,
+                downloadUrl: url
+            };
+        };
+
+        if (splitMode === SplitMode.RANGES || splitMode === SplitMode.AI_SMART) {
+            for (let i = 0; i < ranges.length; i++) {
+                const r = ranges[i];
+                const indices = [];
+                for (let j = r.start - 1; j < r.end; j++) indices.push(j); // 0-based
+                
+                const result = await createPdfFromPages(indices, `${baseName}_part_${i + 1}_${r.label.replace(/\s+/g, '_')}.pdf`);
+                generatedResults.push(result);
+            }
+        } else if (splitMode === SplitMode.FIXED) {
+             const totalPages = pdfDoc.getPageCount();
+             let part = 1;
+             for (let i = 0; i < totalPages; i += fixedNumber) {
+                 const indices = [];
+                 for (let j = i; j < Math.min(i + fixedNumber, totalPages); j++) {
+                     indices.push(j);
+                 }
+                 const result = await createPdfFromPages(indices, `${baseName}_part_${part}.pdf`);
+                 generatedResults.push(result);
+                 part++;
+             }
+        } else if (splitMode === SplitMode.EXTRACT) {
+             // Parse input string "1, 3, 5-8"
+             const parts = extractInput.split(',').map(p => p.trim());
+             const indices = new Set<number>();
+             
+             parts.forEach(part => {
+                 if (part.includes('-')) {
+                     const [start, end] = part.split('-').map(Number);
+                     if (!isNaN(start) && !isNaN(end)) {
+                         for(let i = start; i <= end; i++) indices.add(i - 1);
+                     }
+                 } else {
+                     const num = parseInt(part);
+                     if (!isNaN(num)) indices.add(num - 1);
+                 }
+             });
+
+             const validIndices = Array.from(indices).filter(i => i >= 0 && i < pages.length).sort((a, b) => a - b);
+             if (validIndices.length > 0) {
+                 const result = await createPdfFromPages(validIndices, `${baseName}_extracted.pdf`);
+                 generatedResults.push(result);
+             }
+        }
+
+        setResults(generatedResults);
+    } catch (error) {
+        console.error("Splitting failed:", error);
+        alert("An error occurred while splitting the PDF.");
+    } finally {
+        setIsProcessing(false);
     }
-
-    setResults(generatedResults);
-    setIsProcessing(false);
   };
 
-  const handleDownload = (fileName: string) => {
-    // Create a valid (though minimal/blank) PDF blob so it actually opens
-    // In a real app with backend, this would fetch a URL.
-    // Client-side, we'd use jspdf. Here we use a valid PDF string.
-    const blob = new Blob([MINIMAL_PDF_DATA], { type: 'application/pdf' });
-    const url = URL.createObjectURL(blob);
-    
+  const handleDownload = (url: string, fileName: string) => {
     const link = document.createElement('a');
     link.href = url;
     link.download = fileName;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    URL.revokeObjectURL(url);
   };
 
   const handleDownloadAll = async () => {
       if (!results) return;
       
-      // Use JSZip to create a real zip file containing the PDFs
       const zip = new JSZip();
       
-      results.forEach(res => {
-        // Add each PDF to the zip
-        zip.file(res.fileName, MINIMAL_PDF_DATA);
-      });
+      // We need to fetch the blob from the URL to add to zip
+      for (const res of results) {
+          const blob = await fetch(res.downloadUrl).then(r => r.blob());
+          zip.file(res.fileName, blob);
+      }
 
       const blob = await zip.generateAsync({ type: "blob" });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = "split_documents.zip";
+      link.download = `${file?.name.replace('.pdf', '')}_split_files.zip`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -316,13 +378,10 @@ export const SplitPdfTool: React.FC = () => {
 
   // -- Render Helpers --
 
-  // Determine if a page is in a specific range for coloring
   const getPageColor = (pageId: number) => {
     if (splitMode === SplitMode.RANGES) {
       const pageNumber = pageId + 1;
-      // Prioritize active selection highlight
-      if (selectionStart !== null && pageNumber === selectionStart) return '#3b82f6'; // blue-500
-
+      if (selectionStart !== null && pageNumber === selectionStart) return '#3b82f6';
       const range = ranges.find(r => pageNumber >= r.start && pageNumber <= r.end);
       return range ? range.color : 'transparent';
     }
@@ -332,12 +391,10 @@ export const SplitPdfTool: React.FC = () => {
   const getPageOpacity = (pageId: number) => {
     const pageNumber = pageId + 1;
     if (splitMode === SplitMode.RANGES) {
-        // Highlight logic
         if (selectionStart !== null) {
             if (pageNumber === selectionStart) return 1;
-            return 0.5; // Dim others when selecting
+            return 0.5;
         }
-        // If there are ranges, dim pages not in range
         if (ranges.length > 0) {
              const range = ranges.find(r => pageNumber >= r.start && pageNumber <= r.end);
              return range ? 1 : 0.4;
@@ -404,7 +461,6 @@ export const SplitPdfTool: React.FC = () => {
   if (results) {
     return (
       <div className="max-w-7xl mx-auto p-6 animate-fade-in relative min-h-[80vh]">
-        {/* Top Action Bar for "Split Another PDF" */}
         <div className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4 bg-white p-4 rounded-2xl shadow-sm border border-slate-100">
             <div className="flex items-center gap-3">
                  <div className="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center">
@@ -451,7 +507,7 @@ export const SplitPdfTool: React.FC = () => {
                                 </div>
                             </div>
                             <button 
-                                onClick={() => handleDownload(res.fileName)}
+                                onClick={() => handleDownload(res.downloadUrl, res.fileName)}
                                 className="w-full sm:w-auto flex items-center justify-center gap-2 text-blue-600 hover:text-white hover:bg-blue-600 border border-blue-200 hover:border-blue-600 px-4 py-2 rounded-lg transition-all text-sm font-bold"
                             >
                                 <DownloadIcon className="w-4 h-4" /> Download
@@ -809,7 +865,7 @@ export const SplitPdfTool: React.FC = () => {
 
              <div 
                 className="grid gap-6 pb-20 select-none transition-all duration-300 ease-in-out"
-                style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${100 / zoomLevel + 6}rem, 1fr))` }}
+                style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${14 - zoomLevel}rem, 1fr))` }}
              >
                 {pages.map((page) => {
                     const color = getPageColor(page.id);

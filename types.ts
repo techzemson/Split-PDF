@@ -26,6 +26,7 @@ export interface SplitResult {
   pageCount: number;
   fileSize: string;
   originalName: string;
+  downloadUrl: string;
 }
 
 export interface ProcessStep {
