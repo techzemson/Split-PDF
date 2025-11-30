@@ -3,6 +3,7 @@ export interface PdfPage {
   pageNumber: number;
   selected: boolean;
   thumbnail?: string; // In a real app, this would be a blob URL
+  rotation: number; // 0, 90, 180, 270
 }
 
 export interface SplitRange {
